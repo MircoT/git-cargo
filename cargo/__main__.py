@@ -1,5 +1,6 @@
 import argparse
-from storage import S3Manager
+
+from .storage import S3Manager
 
 
 def main():
@@ -28,6 +29,8 @@ def main():
     if args.sub_command == 'configure':
         if args.configure_target == 's3':
             S3Manager().configure()
+    else:
+        parser.print_usage()
 
 
 if __name__ == '__main__':
