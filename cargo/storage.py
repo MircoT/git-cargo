@@ -1,9 +1,10 @@
 import configparser
 from abc import ABCMeta, abstractmethod
-from glob import glob
-from os import environ, mkdir, path
+from glob import iglob
+from os import chdir, environ, mkdir, path, stat
 
 import boto3
+from tqdm import tqdm
 
 
 class Manager(metaclass=ABCMeta):
@@ -23,12 +24,12 @@ class Manager(metaclass=ABCMeta):
             self._target = target
 
     @abstractmethod
-    def push(self, filename):
+    def push(self, filename, check=False):
         """Push a file on remote repo."""
         pass
 
     @abstractmethod
-    def pull(self, filename):
+    def pull(self, filename, check=False):
         """Pull a file on remote repo."""
         pass
 
@@ -39,7 +40,7 @@ class Manager(metaclass=ABCMeta):
         print("-"*42)
         print("| [Size (MB)]-> Filename")
         print("-"*42)
-        for file_ in glob(path.join(self._source, "*")):
+        for file_ in iglob(path.join(self._source, "*"), recursive=True):
             print("| [{:0.2f}]-> {}".format((path.getsize(file_) /
                                              1024) / 1024, path.split(file_)[-1]))
         print("-"*42)
@@ -49,7 +50,7 @@ class Manager(metaclass=ABCMeta):
         """List the remote files."""
         pass
 
-    def configure(self, *args):
+    def configure(self, *args, **kwargs):
         """Configure the manager."""
         source = input("Insert your source folder path: ")
         target = input(
@@ -69,22 +70,37 @@ class Manager(metaclass=ABCMeta):
         for key, value in additional_config.items():
             manager_config['default'][key] = value
 
+        for key, value in kwargs.items():
+            manager_config['default'][key] = value
+
         with open(self.__config_file_name, "w") as manager_config_file:
             manager_config.write(manager_config_file)
 
 
 class S3Manager(Manager):
 
-    def __init__(self, source=None, target=None, config_file_name='manager_s3.ini'):
+    def __init__(self, source=None, target=None, config_file_name='manager.ini'):
         super().__init__(source, target, config_file_name)
         self.__s3 = boto3.resource('s3')
         self.__bucket = self._config['default']['bucket']
 
-    def push(self, filename):
+    def push(self, file_names, check=False):
         """Push a file on remote repo."""
-        pass
+        BASE_FOLDER = path.abspath(self._source)
+        chdir(BASE_FOLDER)
+        print("-"*42)
+        print("| PUSH FILES TO REMOTE STORAGE")
+        print("-"*42)
+        for filename in file_names:
+            for file_ in iglob(path.join(BASE_FOLDER, filename), recursive=True):
+                size = stat(file_).st_size
+                pbar = tqdm(desc="Upload {}".format(file_),
+                            total=size, unit="bytes", unit_scale=True)
+                self.__s3.Bucket(self.__bucket).upload_file(file_, str(
+                    path.join(self._target, path.split(file_)[-1])), Callback=pbar.update)
+                pbar.close()
 
-    def pull(self, filename):
+    def pull(self, filename, check=False):
         """Pull a file on remote repo."""
         pass
 
@@ -95,7 +111,7 @@ class S3Manager(Manager):
         print("-"*42)
         print("| [Size (MB)]-> Filename")
         print("-"*42)
-        for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=self._target, Delimiter="/"):
+        for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=self._target):
             print(obj)
         print("-"*42)
 
@@ -129,4 +145,4 @@ class S3Manager(Manager):
         with open(path.join(aws_folder, "config"), "w") as aws_config_file:
             aws_config.write(aws_config_file)
 
-        super().configure('bucket')
+        super().configure('bucket', engine="s3")
