@@ -1,23 +1,26 @@
 import configparser
 from abc import ABCMeta, abstractmethod
+from glob import glob
 from os import environ, mkdir, path
+
+import boto3
 
 
 class Manager(metaclass=ABCMeta):
 
     def __init__(self, source=None, target=None, config_file_name='manager.ini'):
         self.__config_file_name = config_file_name
-        self.__config = configparser.ConfigParser()
+        self._config = configparser.ConfigParser()
 
         if config_file_name and path.isfile(config_file_name):
-            with open(config_file_name) as config_file:
-                self.__config.read(config_file)
-            self.__source = self.__config['default']['source']
-            self.__target = self.__config['default']['target']
+            self._config.read(self.__config_file_name)
+            self._source = self._config['default']['source']
+            self._target = self._config['default']['target']
 
-        self.__source = source
-        self.__target = target
-
+        if source:
+            self._source = source
+        if target:
+            self._target = target
 
     @abstractmethod
     def push(self, filename):
@@ -29,10 +32,17 @@ class Manager(metaclass=ABCMeta):
         """Pull a file on remote repo."""
         pass
 
-    @abstractmethod
     def list_local(self):
         """List the local files."""
-        pass
+        print("-"*42)
+        print("| LOCAL FILES")
+        print("-"*42)
+        print("| [Size (MB)]-> Filename")
+        print("-"*42)
+        for file_ in glob(path.join(self._source, "*")):
+            print("| [{:0.2f}]-> {}".format((path.getsize(file_) /
+                                             1024) / 1024, path.split(file_)[-1]))
+        print("-"*42)
 
     @abstractmethod
     def list_remote(self):
@@ -44,10 +54,11 @@ class Manager(metaclass=ABCMeta):
         source = input("Insert your source folder path: ")
         target = input(
             "Insert your target folder name (the remote folder to use): ")
-        
+
         additional_config = {}
         for key in args:
-            additional_config[key] = input("Insert your default {}: ".format(key))
+            additional_config[key] = input(
+                "Insert your default {}: ".format(key))
 
         manager_config = configparser.ConfigParser()
         manager_config['default'] = {
@@ -61,10 +72,13 @@ class Manager(metaclass=ABCMeta):
         with open(self.__config_file_name, "w") as manager_config_file:
             manager_config.write(manager_config_file)
 
+
 class S3Manager(Manager):
 
     def __init__(self, source=None, target=None, config_file_name='manager_s3.ini'):
         super().__init__(source, target, config_file_name)
+        self.__s3 = boto3.resource('s3')
+        self.__bucket = self._config['default']['bucket']
 
     def push(self, filename):
         """Push a file on remote repo."""
@@ -74,13 +88,16 @@ class S3Manager(Manager):
         """Pull a file on remote repo."""
         pass
 
-    def list_local(self):
-        """List the local files."""
-        pass
-
     def list_remote(self):
         """List the remote files."""
-        pass
+        print("-"*42)
+        print("| LOCAL FILES")
+        print("-"*42)
+        print("| [Size (MB)]-> Filename")
+        print("-"*42)
+        for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=self._target, Delimiter="/"):
+            print(obj)
+        print("-"*42)
 
     def configure(self):
         """Configure the manager."""
@@ -111,5 +128,5 @@ class S3Manager(Manager):
 
         with open(path.join(aws_folder, "config"), "w") as aws_config_file:
             aws_config.write(aws_config_file)
-        
+
         super().configure('bucket')
