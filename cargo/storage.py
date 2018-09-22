@@ -1,4 +1,5 @@
 import configparser
+import hashlib
 from abc import ABCMeta, abstractmethod
 from glob import iglob
 from os import chdir, environ, mkdir, path, stat
@@ -42,7 +43,7 @@ class Manager(metaclass=ABCMeta):
         print("-"*42)
         for file_ in iglob(path.join(self._source, "*"), recursive=True):
             print("| [{:0.2f}]-> {}".format((path.getsize(file_) /
-                                             1024) / 1024, path.split(file_)[-1]))
+                                             1024) / 1024, file_))
         print("-"*42)
 
     @abstractmethod
@@ -84,7 +85,7 @@ class S3Manager(Manager):
         self.__s3 = boto3.resource('s3')
         self.__bucket = self._config['default']['bucket']
 
-    def push(self, file_names, check=False):
+    def push(self, file_names, check=True):
         """Push a file on remote repo."""
         BASE_FOLDER = path.abspath(self._source)
         chdir(BASE_FOLDER)
@@ -93,12 +94,29 @@ class S3Manager(Manager):
         print("-"*42)
         for filename in file_names:
             for file_ in iglob(path.join(BASE_FOLDER, filename), recursive=True):
+                current_file_name = path.join(*path.split(file_)[1:])
                 size = stat(file_).st_size
+                file_md5 = hashlib.md5()
+                with open(file_, "rb") as current_file:
+                    file_md5.update(current_file.read())
+                md5_digest = file_md5.hexdigest()
+                if check:
+                    obj = self.__s3.Object(self.__bucket, path.join(self._target, current_file_name))
+                    if 'md5' in obj.metadata:
+                        if obj.metadata['md5'] == md5_digest:
+                            print("[SKIPPED] File '{}' already uploaded and not changed...".format(current_file_name))
+                            continue
+                    ## TO DO
+                    # Check with E_TAG
                 pbar = tqdm(desc="Upload {}".format(file_),
                             total=size, unit="bytes", unit_scale=True)
                 self.__s3.Bucket(self.__bucket).upload_file(file_, str(
-                    path.join(self._target, path.split(file_)[-1])), Callback=pbar.update)
+                    path.join(self._target, current_file_name)), ExtraArgs={
+                        "Metadata": {"md5": md5_digest}
+                }, Callback=pbar.update)
+                print(md5_digest)
                 pbar.close()
+        print("-"*42)
 
     def pull(self, filename, check=False):
         """Pull a file on remote repo."""
@@ -112,7 +130,9 @@ class S3Manager(Manager):
         print("| [Size (MB)]-> Filename")
         print("-"*42)
         for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=self._target):
-            print(obj)
+            print("| [{:0.2f}]-> {}".format((obj.meta.data["Size"] /
+                                             1024) / 1024, obj.key)[1:])
+            # print(obj.Object().metadata['md5'])
         print("-"*42)
 
     def configure(self):
