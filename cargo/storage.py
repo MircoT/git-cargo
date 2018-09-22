@@ -26,12 +26,12 @@ class Manager(metaclass=ABCMeta):
 
     @abstractmethod
     def push(self, filename, check=False):
-        """Push a file on remote repo."""
+        """Push a file to remote repo."""
         pass
 
     @abstractmethod
     def pull(self, filename, check=False):
-        """Pull a file on remote repo."""
+        """Pull a file from remote repo."""
         pass
 
     def list_local(self):
@@ -86,7 +86,7 @@ class S3Manager(Manager):
         self.__bucket = self._config['default']['bucket']
 
     def push(self, file_names, check=True):
-        """Push a file on remote repo."""
+        """Push a file to remote repo."""
         BASE_FOLDER = path.abspath(self._source)
         chdir(BASE_FOLDER)
         print("-"*42)
@@ -119,7 +119,7 @@ class S3Manager(Manager):
         print("-"*42)
 
     def pull(self, filename, check=False):
-        """Pull a file on remote repo."""
+        """Pull a file from remote repo."""
         pass
 
     def list_remote(self):
