@@ -47,6 +47,8 @@ def main():
         'push', help='Push files to remote storage')
     parser_push.add_argument('push_target', metavar="target", nargs="+",
                              default=None, type=str, help='Push files to remote storage.')
+    parser_push.add_argument('--force', default=False, type=bool,
+                             help='Force to push files to remote storage.')
 
     ##
     # sub_command pull
@@ -54,6 +56,8 @@ def main():
         'pull', help='Pull files to local storage')
     parser_pull.add_argument('pull_target', metavar="target", nargs="+",
                              default=None, type=str, help='Pull files to local storage.')
+    parser_pull.add_argument('--force', default=False, type=bool,
+                             help='Force to pull files to remote storage.')
 
     args, _ = parser.parse_known_args()
 
@@ -71,7 +75,10 @@ def main():
             S3Manager().list_remote()
     elif args.sub_command == 'push':
         engine = get_engine()
-        engine.push(args.push_target)
+        engine.push(args.push_target, args.force)
+    elif args.sub_command == 'pull':
+        engine = get_engine()
+        engine.pull(args.push_target, args.force)
     else:
         parser.print_usage()
 

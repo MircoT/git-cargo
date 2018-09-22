@@ -2,6 +2,7 @@ import configparser
 import hashlib
 from abc import ABCMeta, abstractmethod
 from glob import iglob
+from math import ceil
 from os import chdir, environ, mkdir, path, stat
 
 import boto3
@@ -86,14 +87,48 @@ class S3Manager(Manager):
         self.__s3 = boto3.resource('s3')
         self.__bucket = self._config['default']['bucket']
 
-    def __read_file_by_chuncks(self, filepath, chunk_size=16):
+    def __read_file_by_chuncks(self, filepath, chunk_size=16, desc="Read file"):
         CHUNK_SIZE_MB = chunk_size * 1024 * 1024
+        filename = path.join(*path.split(filepath)[1:])
         size = stat(filepath).st_size
+        pbar = tqdm(desc="{} {}".format(desc, filename), total=size, unit="bytes", unit_scale=True)
         with open(filepath, "rb") as current_file:
             while current_file.tell() != size:
                 yield current_file.read(CHUNK_SIZE_MB)
+                pbar.update(CHUNK_SIZE_MB)
+        pbar.close()
 
-    def push(self, file_names, check=True, chunk_size=16):
+    def __gen_md5(self, filepath, chunk_size=8):
+        current_md5 = hashlib.md5()
+        for chunk in self.__read_file_by_chuncks(filepath, chunk_size, desc="[Calculation md5]"):
+            current_md5.update(chunk)
+        return current_md5.hexdigest()
+
+    def __gen_etag(self, filepath, chunk_size=16):
+        md5_list = []
+        for chunk in self.__read_file_by_chuncks(filepath, chunk_size, desc="[Calculation Etag]"):
+            md5_list.append(hashlib.md5(chunk).digest())
+        digests = b"".join(md5_list)
+        etag_digest = "{}-{}".format(
+            hashlib.md5(digests).hexdigest(),
+            len(md5_list)
+        )
+        return etag_digest
+
+    def __etag_ok(self, filepath, local_etag, remote_etag):
+        if local_etag[-1] != remote_etag[-1]:
+            parts = int(remote_etag[-1])
+            size = stat(filepath).st_size
+            chunk_size = ceil((size / parts) / 1024 / 1024)
+            local_etag = self.__gen_etag(filepath, chunk_size)
+
+        return local_etag == remote_etag
+
+    @staticmethod
+    def __get_etag(s3object):
+        return s3object.meta.data['ETag'].replace("\"", "")
+
+    def push(self, file_names, force=False, chunk_size=16):
         """Push a file to remote repo."""
         BASE_FOLDER = path.abspath(self._source)
         chdir(BASE_FOLDER)
@@ -104,21 +139,9 @@ class S3Manager(Manager):
             for file_ in iglob(path.join(BASE_FOLDER, filename), recursive=True):
                 current_file_name = path.join(*path.split(file_)[1:])
                 size = stat(file_).st_size
-                file_md5 = hashlib.md5()
-                md5_list = []
-                for chunk in self.__read_file_by_chuncks(file_):
-                    file_md5.update(chunk)
-                    md5_list.append(hashlib.md5(chunk).digest())
-                digests = b"".join(md5_list)
-                etag_digest = "{}-{}".format(
-                    hashlib.md5(digests).hexdigest(),
-                    len(md5_list)
-                )
-                md5_digest = file_md5.hexdigest()
-                print(md5_digest)
-                print(etag_digest)
-                exit()
-                if check:
+                md5_digest = self.__gen_md5(file_)
+                etag_digest = self.__gen_etag(file_, chunk_size)
+                if not force:
                     try:
                         obj = self.__s3.Object(self.__bucket, path.join(
                             self._target, current_file_name))
@@ -128,8 +151,14 @@ class S3Manager(Manager):
                                     current_file_name))
                                 continue
                         else:
-                            raise Exception(
-                                "Can't check file {} on remote".format(current_file_name))
+                            remote_etag = self.__get_etag(obj)
+                            if self.__etag_ok(file_, etag_digest, remote_etag):
+                                print("[SKIPPED] File '{}' already uploaded and not changed...".format(
+                                    current_file_name))
+                                continue
+                            else:
+                                raise Exception(
+                                    "Can't check file {} on remote storage".format(current_file_name))
                     except botocore.exceptions.ClientError as exp:
                         error_code = exp.response['Error']['Code']
                         if error_code != '404':
@@ -140,13 +169,13 @@ class S3Manager(Manager):
                     path.join(self._target, current_file_name)), ExtraArgs={
                         "Metadata": {"md5": md5_digest}
                 }, Callback=pbar.update)
-                print(md5_digest)
                 pbar.close()
         print("-"*42)
 
-    def pull(self, filename, check=False):
+    def pull(self, filename, force=False):
         """Pull a file from remote repo."""
-        pass
+        for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=path.join(self._target, filename)):
+            print(obj.key)
 
     def list_remote(self):
         """List the remote files."""
