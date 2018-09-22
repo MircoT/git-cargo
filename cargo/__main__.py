@@ -78,7 +78,7 @@ def main():
         engine.push(args.push_target, args.force)
     elif args.sub_command == 'pull':
         engine = get_engine()
-        engine.pull(args.push_target, args.force)
+        engine.pull(args.pull_target, args.force)
     else:
         parser.print_usage()
 

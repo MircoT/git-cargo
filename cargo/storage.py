@@ -27,12 +27,12 @@ class Manager(metaclass=ABCMeta):
             self._target = target
 
     @abstractmethod
-    def push(self, filename, check=False):
+    def push(self, file_name, check=False):
         """Push a file to remote repo."""
         pass
 
     @abstractmethod
-    def pull(self, filename, check=False):
+    def pull(self, file_name, check=False):
         """Pull a file from remote repo."""
         pass
 
@@ -41,7 +41,7 @@ class Manager(metaclass=ABCMeta):
         print("-"*42)
         print("| LOCAL FILES")
         print("-"*42)
-        print("| [Size (MB)]-> Filename")
+        print("| [Size (MB)]-> File_name")
         print("-"*42)
         for file_ in iglob(path.join(self._source, "*"), recursive=True):
             print("| [{:0.2f}]-> {}".format((path.getsize(file_) /
@@ -89,9 +89,9 @@ class S3Manager(Manager):
 
     def __read_file_by_chuncks(self, filepath, chunk_size=16, desc="Read file"):
         CHUNK_SIZE_MB = chunk_size * 1024 * 1024
-        filename = path.join(*path.split(filepath)[1:])
+        file_name = path.join(*path.split(filepath)[1:])
         size = stat(filepath).st_size
-        pbar = tqdm(desc="{} {}".format(desc, filename), total=size, unit="bytes", unit_scale=True)
+        pbar = tqdm(desc="{} {}".format(desc, file_name), total=size, unit="bytes", unit_scale=True)
         with open(filepath, "rb") as current_file:
             while current_file.tell() != size:
                 yield current_file.read(CHUNK_SIZE_MB)
@@ -135,8 +135,8 @@ class S3Manager(Manager):
         print("-"*42)
         print("| PUSH FILES TO REMOTE STORAGE")
         print("-"*42)
-        for filename in file_names:
-            for file_ in iglob(path.join(BASE_FOLDER, filename), recursive=True):
+        for file_name in file_names:
+            for file_ in iglob(path.join(BASE_FOLDER, file_name), recursive=True):
                 current_file_name = path.join(*path.split(file_)[1:])
                 size = stat(file_).st_size
                 md5_digest = self.__gen_md5(file_)
@@ -172,17 +172,19 @@ class S3Manager(Manager):
                 pbar.close()
         print("-"*42)
 
-    def pull(self, filename, force=False):
+    def pull(self, file_names, force=False):
         """Pull a file from remote repo."""
-        for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=path.join(self._target, filename)):
-            print(obj.key)
+        for file_name in file_names:
+            print(path.join(self._target, file_name))
+            for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=path.join(self._target, file_name)):
+                print(obj.key)
 
     def list_remote(self):
         """List the remote files."""
         print("-"*42)
         print("| LOCAL FILES")
         print("-"*42)
-        print("| [Size (MB)]-> Filename")
+        print("| [Size (MB)]-> File name")
         print("-"*42)
         for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=self._target):
             print("| [{:0.2f}]-> {}".format((obj.meta.data["Size"] /
