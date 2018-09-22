@@ -5,6 +5,7 @@ from glob import iglob
 from os import chdir, environ, mkdir, path, stat
 
 import boto3
+import botocore
 from tqdm import tqdm
 
 
@@ -85,7 +86,14 @@ class S3Manager(Manager):
         self.__s3 = boto3.resource('s3')
         self.__bucket = self._config['default']['bucket']
 
-    def push(self, file_names, check=True):
+    def __read_file_by_chuncks(self, filepath, chunk_size=16):
+        CHUNK_SIZE_MB = chunk_size * 1024 * 1024
+        size = stat(filepath).st_size
+        with open(filepath, "rb") as current_file:
+            while current_file.tell() != size:
+                yield current_file.read(CHUNK_SIZE_MB)
+
+    def push(self, file_names, check=True, chunk_size=16):
         """Push a file to remote repo."""
         BASE_FOLDER = path.abspath(self._source)
         chdir(BASE_FOLDER)
@@ -97,17 +105,35 @@ class S3Manager(Manager):
                 current_file_name = path.join(*path.split(file_)[1:])
                 size = stat(file_).st_size
                 file_md5 = hashlib.md5()
-                with open(file_, "rb") as current_file:
-                    file_md5.update(current_file.read())
+                md5_list = []
+                for chunk in self.__read_file_by_chuncks(file_):
+                    file_md5.update(chunk)
+                    md5_list.append(hashlib.md5(chunk).digest())
+                digests = b"".join(md5_list)
+                etag_digest = "{}-{}".format(
+                    hashlib.md5(digests).hexdigest(),
+                    len(md5_list)
+                )
                 md5_digest = file_md5.hexdigest()
+                print(md5_digest)
+                print(etag_digest)
+                exit()
                 if check:
-                    obj = self.__s3.Object(self.__bucket, path.join(self._target, current_file_name))
-                    if 'md5' in obj.metadata:
-                        if obj.metadata['md5'] == md5_digest:
-                            print("[SKIPPED] File '{}' already uploaded and not changed...".format(current_file_name))
-                            continue
-                    ## TO DO
-                    # Check with E_TAG
+                    try:
+                        obj = self.__s3.Object(self.__bucket, path.join(
+                            self._target, current_file_name))
+                        if 'md5' in obj.metadata:
+                            if obj.metadata['md5'] == md5_digest:
+                                print("[SKIPPED] File '{}' already uploaded and not changed...".format(
+                                    current_file_name))
+                                continue
+                        else:
+                            raise Exception(
+                                "Can't check file {} on remote".format(current_file_name))
+                    except botocore.exceptions.ClientError as exp:
+                        error_code = exp.response['Error']['Code']
+                        if error_code != '404':
+                            raise
                 pbar = tqdm(desc="Upload {}".format(file_),
                             total=size, unit="bytes", unit_scale=True)
                 self.__s3.Bucket(self.__bucket).upload_file(file_, str(
