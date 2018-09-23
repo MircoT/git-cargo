@@ -63,7 +63,7 @@ def main():
 
     ##
     # OUTPUT TEST - to be removed...
-    print(args)
+    # print(args)
 
     if args.sub_command == 'configure':
         if args.configure_target == 's3':

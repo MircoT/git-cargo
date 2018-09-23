@@ -3,7 +3,7 @@ import hashlib
 from abc import ABCMeta, abstractmethod
 from glob import iglob
 from math import ceil
-from os import chdir, environ, mkdir, path, stat
+from os import chdir, environ, makedirs, mkdir, path, stat
 
 import boto3
 import botocore
@@ -141,6 +141,24 @@ class S3Manager(Manager):
     @staticmethod
     def __get_s3obj_size(s3object):
         return s3object.meta.data['Size']
+    
+    def __get_relative_path(self, current_path, target='local'):
+        tail, head = path.split(current_path)
+        tmp = [head]
+        if target == 'local':
+            target_folder = path.split(self._target)[1]
+        elif target == 'remote':
+            target_folder = path.split(self._source)[1]
+        else:
+            raise Exception("Not a valid target")
+        while head != target_folder:
+            tail, head = path.split(tail)
+            tmp.append(head)
+        if target == 'local':
+            tmp.pop(-1)
+        elif target == 'remote':
+            tmp[-1] = path.split(self._target)[1]
+        return path.join(*list(reversed(tmp)))
 
     def push(self, file_names, force=False, chunk_size=16):
         """Push a file to remote repo."""
@@ -151,7 +169,7 @@ class S3Manager(Manager):
         print("-"*42)
         for file_name in file_names:
             for file_ in iglob(path.join(BASE_FOLDER, file_name), recursive=True):
-                current_file_name = path.join(*path.split(file_)[1:])
+                current_file_name = path.split(file_)[1]
                 size = stat(file_).st_size
                 md5_digest = self.__gen_md5(file_)
                 if not force:
@@ -179,10 +197,14 @@ class S3Manager(Manager):
                             raise
                 pbar = tqdm(desc="Upload {}".format(file_),
                             total=size, unit="bytes", unit_scale=True)
-                self.__s3.Bucket(self.__bucket).upload_file(file_, str(
-                    path.join(self._target, current_file_name)), ExtraArgs={
+                self.__s3.Bucket(self.__bucket).upload_file(
+                    file_,
+                    self.__get_relative_path(file_, 'remote'), 
+                    ExtraArgs={
                         "Metadata": {"md5": md5_digest}
-                }, Callback=pbar.update)
+                    }, 
+                    Callback=pbar.update
+                )
                 pbar.close()
         print("-"*42)
 
@@ -191,8 +213,8 @@ class S3Manager(Manager):
         BASE_FOLDER = path.abspath(self._source)
         for file_name in file_names:
             for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=path.join(self._target, file_name)):
-                current_file_name = path.join(*path.split(obj.key)[1:])
-                local_file = path.join(BASE_FOLDER, *path.split(obj.key)[1:])
+                current_file_name = path.split(obj.key)[1]
+                local_file = path.join(BASE_FOLDER, self.__get_relative_path(obj.key, 'local'))
                 if not force:
                     if 'md5' in obj.Object().metadata:
                         md5_digest = self.__gen_md5(local_file)
@@ -213,7 +235,12 @@ class S3Manager(Manager):
                                     "Can't check file {} from remote storage".format(current_file_name))
                 pbar = tqdm(desc="Download {}".format(obj.key),
                             total=self.__get_s3obj_size(obj), unit="bytes", unit_scale=True)
-                self.__s3.Bucket(self.__bucket).download_file(obj.key, local_file, Callback=pbar.update)
+                makedirs(path.split(local_file)[0], exist_ok=True)
+                self.__s3.Bucket(self.__bucket).download_file(
+                    obj.key, 
+                    local_file, 
+                    Callback=pbar.update
+                )
                 pbar.close()
 
     def list_remote(self):
