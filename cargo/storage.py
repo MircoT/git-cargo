@@ -91,7 +91,8 @@ class S3Manager(Manager):
         CHUNK_SIZE_MB = chunk_size * 1024 * 1024
         file_name = path.join(*path.split(filepath)[1:])
         size = stat(filepath).st_size
-        pbar = tqdm(desc="{} {}".format(desc, file_name), total=size, unit="bytes", unit_scale=True)
+        pbar = tqdm(desc="{} {}".format(desc, file_name),
+                    total=size, unit="bytes", unit_scale=True)
         with open(filepath, "rb") as current_file:
             while current_file.tell() != size:
                 yield current_file.read(CHUNK_SIZE_MB)
@@ -115,9 +116,18 @@ class S3Manager(Manager):
         )
         return etag_digest
 
+    @staticmethod
+    def __get_s3obj_etag_nparts(string):
+        """Get the number of digest calculated with etag.
+
+        Example:
+            "xyz123abc-5" -> "5"
+        """
+        return string.split("-")[-1].strip()
+
     def __etag_ok(self, filepath, local_etag, remote_etag):
-        if local_etag[-1] != remote_etag[-1]:
-            parts = int(remote_etag[-1])
+        if self.__get_s3obj_etag_nparts(local_etag) != self.__get_s3obj_etag_nparts(remote_etag):
+            parts = int(self.__get_s3obj_etag_nparts(remote_etag))
             size = stat(filepath).st_size
             chunk_size = ceil((size / parts) / 1024 / 1024)
             local_etag = self.__gen_etag(filepath, chunk_size)
@@ -125,8 +135,12 @@ class S3Manager(Manager):
         return local_etag == remote_etag
 
     @staticmethod
-    def __get_etag(s3object):
+    def __get_s3obj_etag(s3object):
         return s3object.meta.data['ETag'].replace("\"", "")
+    
+    @staticmethod
+    def __get_s3obj_size(s3object):
+        return s3object.meta.data['Size']
 
     def push(self, file_names, force=False, chunk_size=16):
         """Push a file to remote repo."""
@@ -140,7 +154,6 @@ class S3Manager(Manager):
                 current_file_name = path.join(*path.split(file_)[1:])
                 size = stat(file_).st_size
                 md5_digest = self.__gen_md5(file_)
-                etag_digest = self.__gen_etag(file_, chunk_size)
                 if not force:
                     try:
                         obj = self.__s3.Object(self.__bucket, path.join(
@@ -151,7 +164,8 @@ class S3Manager(Manager):
                                     current_file_name))
                                 continue
                         else:
-                            remote_etag = self.__get_etag(obj)
+                            etag_digest = self.__gen_etag(file_, chunk_size)
+                            remote_etag = self.__get_s3obj_etag(obj)
                             if self.__etag_ok(file_, etag_digest, remote_etag):
                                 print("[SKIPPED] File '{}' already uploaded and not changed...".format(
                                     current_file_name))
@@ -172,12 +186,35 @@ class S3Manager(Manager):
                 pbar.close()
         print("-"*42)
 
-    def pull(self, file_names, force=False):
+    def pull(self, file_names, force=False, chunk_size=16):
         """Pull a file from remote repo."""
+        BASE_FOLDER = path.abspath(self._source)
         for file_name in file_names:
-            print(path.join(self._target, file_name))
             for obj in self.__s3.Bucket(self.__bucket).objects.filter(Prefix=path.join(self._target, file_name)):
-                print(obj.key)
+                current_file_name = path.join(*path.split(obj.key)[1:])
+                local_file = path.join(BASE_FOLDER, *path.split(obj.key)[1:])
+                if not force:
+                    if 'md5' in obj.Object().metadata:
+                        md5_digest = self.__gen_md5(local_file)
+                        if md5_digest != obj.Object().metadata['md5']:
+                            print("[SKIPPED] File '{}' already downloaded and not changed...".format(
+                                current_file_name))
+                            continue
+                        else:
+                            etag_digest = self.__gen_etag(
+                                local_file, chunk_size)
+                            remote_etag = self.__get_s3obj_etag(obj)
+                            if self.__etag_ok(local_file, etag_digest, remote_etag):
+                                print("[SKIPPED] File '{}' already downloaded and not changed...".format(
+                                    current_file_name))
+                                continue
+                            else:
+                                raise Exception(
+                                    "Can't check file {} from remote storage".format(current_file_name))
+                pbar = tqdm(desc="Download {}".format(obj.key),
+                            total=self.__get_s3obj_size(obj), unit="bytes", unit_scale=True)
+                self.__s3.Bucket(self.__bucket).download_file(obj.key, local_file, Callback=pbar.update)
+                pbar.close()
 
     def list_remote(self):
         """List the remote files."""
