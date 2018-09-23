@@ -54,7 +54,7 @@ class Manager(metaclass=ABCMeta):
         pass
 
     def configure(self, *args, **kwargs):
-        """Configure the manager."""
+        """Base configuration for manager class."""
         source = input("Insert your source folder path: ")
         target = input(
             "Insert your target folder name (the remote folder to use): ")
@@ -88,6 +88,7 @@ class S3Manager(Manager):
         self.__bucket = self._config['default']['bucket']
 
     def __read_file_by_chuncks(self, filepath, chunk_size=16, desc="Read file"):
+        """Read file by chunks."""
         CHUNK_SIZE_MB = chunk_size * 1024 * 1024
         file_name = path.join(*path.split(filepath)[1:])
         size = stat(filepath).st_size
@@ -100,12 +101,20 @@ class S3Manager(Manager):
         pbar.close()
 
     def __gen_md5(self, filepath, chunk_size=8):
+        """Calculate md5 from file."""
         current_md5 = hashlib.md5()
         for chunk in self.__read_file_by_chuncks(filepath, chunk_size, desc="[Calculation md5]"):
             current_md5.update(chunk)
         return current_md5.hexdigest()
 
     def __gen_etag(self, filepath, chunk_size=16):
+        """Generate Amazon S3 Etag.
+
+        Algorithm:
+            - calculate md5 digest for each chunk
+            - result = md5(all_md5_concatenated) + number of md5 calculated
+                       "dadn12rnod2i1pd1idw1kd1k-5"
+        """
         md5_list = []
         for chunk in self.__read_file_by_chuncks(filepath, chunk_size, desc="[Calculation Etag]"):
             md5_list.append(hashlib.md5(chunk).digest())
@@ -126,6 +135,12 @@ class S3Manager(Manager):
         return string.split("-")[-1].strip()
 
     def __etag_ok(self, filepath, local_etag, remote_etag):
+        """Check if calculated etag is ok.
+        
+        If etag is different for number of chunks (the last number of the digest),
+        the etag is calculated with the chunksize of the remote one.
+        """
+
         if self.__get_s3obj_etag_nparts(local_etag) != self.__get_s3obj_etag_nparts(remote_etag):
             parts = int(self.__get_s3obj_etag_nparts(remote_etag))
             size = stat(filepath).st_size
@@ -136,13 +151,20 @@ class S3Manager(Manager):
 
     @staticmethod
     def __get_s3obj_etag(s3object):
+        """Retreive the etag from aws s3 object."""
         return s3object.meta.data['ETag'].replace("\"", "")
     
     @staticmethod
     def __get_s3obj_size(s3object):
+        """Retreive the size from aws s3 object."""
         return s3object.meta.data['Size']
     
     def __get_relative_path(self, current_path, target='local'):
+        """Convert the abs path into relative path respect the target folder.
+        
+        The result is used from the remote storage and the local storage
+        to prepare folder and subfolder, depends on target argument.
+        """
         tail, head = path.split(current_path)
         tmp = [head]
         if target == 'local':
@@ -257,7 +279,7 @@ class S3Manager(Manager):
         print("-"*42)
 
     def configure(self):
-        """Configure the manager."""
+        """Generate the configuration for the manager."""
 
         aws_access_key_id = input("Insert your aws access key id: ")
         aws_secret_access_key = input("Insert your aws secret access key: ")
