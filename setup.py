@@ -5,7 +5,7 @@ with open("requirements.txt") as requirement_file:
     requirements = requirement_file.readlines()
 setup(
     name='git-cargo',
-    version='1.0',
+    version='1.0.0',
     description='Python storage manager for git',
     author='Mirco Tracolli',
     author_email='m.tracolli@gmail.com',
